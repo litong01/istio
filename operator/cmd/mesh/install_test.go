@@ -18,7 +18,11 @@ import (
 	"strings"
 	"testing"
 
-	"istio.io/istio/operator/pkg/object"
+	"istio.io/api/operator/v1alpha1"
+	pkgAPI "istio.io/istio/operator/pkg/apis/istio/v1alpha1"
+	"istio.io/istio/operator/pkg/util"
+	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
 func TestManifestFromString(t *testing.T) {
@@ -95,14 +99,7 @@ spec:
 	}
 }
 
-func TestShowDifferences(t *testing.T) {
-	getK8sObj := func(content string) *object.K8sObject {
-		obj, err := object.ParseYAMLToK8sObject([]byte(content))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return obj
-	}
+func TestShowDiffAgain(t *testing.T) {
 	testInput1 := `---
 apiVersion: install.istio.io/v1alpha1
 kind: IstioOperator
@@ -110,63 +107,106 @@ metadata:
   namespace: istio-operator-test
   name: test-operator
 spec:
-  values:
-    global:
-      logging:
-        level: "default:info"
   components:
     ingressGateways:
     - name: istio-ingressgateway
-      enabled: true`
-	testInput2 := `---
-apiVersion: install.istio.io/v1alpha1
-kind: IstioOperator
-metadata:
-  namespace: istio-operator-test
-  name: test-operator
-spec:
-  values:
-    global:
-      logging:
-        level: "default:error"
-  components:
-    ingressGateways:
-    - name: istio-ingressgateway
+      k8s:
+        service:
+          ports:
+          - port: 15021
+            targetPort: 15021
+            name: status-port
       enabled: true`
 	tests := []struct {
-		name         string
-		diff1        string
-		diff2        string
-		mustContains []string
+		name  string
+		diff1 string
 	}{
 		{
 			name:  "different inputs",
 			diff1: testInput1,
-			diff2: testInput2,
-			mustContains: []string{
-				"-        level: default:info",
-				"+        level: default:error",
-			},
-		},
-		{
-			name:         "same inputs",
-			diff1:        testInput1,
-			diff2:        testInput1,
-			mustContains: []string{""},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := showDifferences(getK8sObj(tt.diff1).UnstructuredObject(),
-				getK8sObj(tt.diff2).UnstructuredObject())
+			liop := &pkgAPI.IstioOperator{}
+			err := util.UnmarshalWithJSONPB(tt.diff1, liop, true)
 			if err != nil {
 				t.Errorf("Expected no error but got error %v", err)
-			} else {
-				for _, mcs := range tt.mustContains {
-					if !strings.Contains(result, mcs) {
-						t.Errorf("Results must contain %s, but is not found in the results", mcs)
-					}
-				}
+			}
+		})
+	}
+}
+
+func TestShowDiffSimple(t *testing.T) {
+	testInput1 := `---
+port: 15021
+targetPort: 50121
+  type: 1
+  strVal: whatever
+name: status-port`
+	tests := []struct {
+		name  string
+		diff1 string
+	}{
+		{
+			name:  "different inputs",
+			diff1: testInput1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			liop := &v1.ServicePort{}
+			err := util.UnmarshalWithJSONPB(tt.diff1, liop, true)
+			if err != nil {
+				t.Errorf("Expected no error but got error %v", err)
+			}
+		})
+	}
+}
+
+func TestIntOrStr(t *testing.T) {
+	testInput1 := `---
+targetPort: 50212
+`
+	tests := []struct {
+		name  string
+		diff1 string
+	}{
+		{
+			name:  "different inputs",
+			diff1: testInput1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			liop := &intstr.IntOrString{}
+			err := util.UnmarshalWithJSONPB(tt.diff1, liop, true)
+			if err != nil {
+				t.Errorf("Expected no error but got error %v", err)
+			}
+		})
+	}
+}
+
+func TestIntOrStrPB(t *testing.T) {
+	testInput1 := `---
+50212
+`
+	tests := []struct {
+		name  string
+		diff1 string
+	}{
+		{
+			name:  "different inputs",
+			diff1: testInput1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			liop := &v1alpha1.IntOrStringForPB{}
+			err := util.UnmarshalWithJSONPB(tt.diff1, liop, true)
+			if err != nil {
+				t.Errorf("Expected no error but got error %v", err)
 			}
 		})
 	}

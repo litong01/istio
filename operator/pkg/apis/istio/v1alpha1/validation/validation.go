@@ -213,11 +213,11 @@ func validateGateways(gw []*v1alpha1.GatewaySpec, name string) util.Errors {
 	for _, gw := range gw {
 		for _, p := range gw.GetK8S().GetService().GetPorts() {
 			tp := 0
-			if p.TargetPort != nil && p.TargetPort.Type == intstr.String {
+			if p.TargetPort.Type == intstr.String {
 				// Do not validate named ports
 				continue
 			}
-			if p.TargetPort != nil && p.TargetPort.Type == intstr.Int {
+			if p.TargetPort.Type == intstr.Int {
 				tp = int(p.TargetPort.IntVal)
 			}
 			if tp == 0 && p.Port > 1024 {

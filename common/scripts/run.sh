@@ -55,6 +55,7 @@ read -ra DOCKER_RUN_OPTIONS <<< "${DOCKER_RUN_OPTIONS:-}"
     --env-file <(env | grep -v ${ENV_BLOCKLIST}) \
     -e IN_BUILD_CONTAINER=1 \
     -e TZ="${TIMEZONE:-$TZ}" \
+    -v $(pwd)/../api:/api \
     --mount "type=bind,source=${MOUNT_SOURCE},destination=/work,consistency=cached" \
     --mount "type=volume,source=go,destination=/go,consistency=cached" \
     --mount "type=volume,source=gocache,destination=/gocache,consistency=cached" \

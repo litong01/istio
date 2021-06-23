@@ -74,6 +74,7 @@ func UnmarshalWithJSONPB(y string, out proto.Message, allowUnknownField bool) er
 	if err != nil {
 		return err
 	}
+
 	u := jsonpb.Unmarshaler{AllowUnknownFields: allowUnknownField}
 	err = u.Unmarshal(bytes.NewReader(jb), out)
 	if err != nil {
