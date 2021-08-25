@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	klabels "k8s.io/apimachinery/pkg/labels"
@@ -217,6 +218,7 @@ func (h *HelmReconciler) GetPrunedResources(revision string, includeClusterResou
 		if err != nil {
 			return usList, err
 		}
+
 		if includeClusterResources {
 			s := klabels.NewSelector()
 			err = h.client.List(context.TODO(), objects,
@@ -413,4 +415,123 @@ func (h *HelmReconciler) removeFromObjectCache(componentName, objHash string) {
 	}
 	cache.RemoveObject(crHash, objHash)
 	scope.Infof("Removed object %s from Cache.", objHash)
+}
+
+// GetResourceManifestFromCluster retrieves the object from the running system based on passed in operator
+// name, namespace, api version, and kind, then produce a sort manifest file.
+func (h *HelmReconciler) GetResourceManifestFromCluster(iop *v1alpha12.IstioOperator) (string, error) {
+
+	enabledComponents, err := translate.GetEnabledComponents(iop.Spec)
+	if err != nil {
+		return "", err
+	}
+	var objects object.K8sObjects
+	for _, c := range enabledComponents {
+		uslist, err := h.GetPrunedResources(iop.Spec.Revision, true, c)
+		if err != nil {
+			return "", err
+		}
+		for _, item := range uslist {
+			for _, small := range item.Items {
+				// We need to remove status before we take the object for comparison
+				delete(small.Object, "status")
+				// Need to remove metadata.managedFields as well.
+				if small.Object["metadata"] != nil {
+					delete(small.Object["metadata"].(map[string]interface{}), "managedFields")
+					delete(small.Object["metadata"].(map[string]interface{}), "uid")
+					delete(small.Object["metadata"].(map[string]interface{}), "creationTimestamp")
+					delete(small.Object["metadata"].(map[string]interface{}), "resourceVersion")
+					delete(small.Object["metadata"].(map[string]interface{}), "annotations")
+				}
+				objects = append(objects, object.NewK8sObject(&small, nil, nil))
+				// targetYAML, _ := object.NewK8sObject(&small, nil, nil).YAML()
+				// fmt.Println(string(targetYAML))
+			}
+		}
+	}
+
+	objects.Sort(object.DefaultObjectOrder())
+	var retStr string
+	for _, obj := range objects {
+		yml, err := obj.YAML()
+		if err != nil {
+			return "", err
+		}
+
+		retStr += object.YAMLSeparator + string(yml)
+	}
+
+	return retStr, nil
+}
+
+// FetchResources retrieve resources by manifests with matching revision label.
+// Each resource will be represented as k8s manifest with only istio configurable
+// fields
+func (h *HelmReconciler) FetchResources(manifestMap name.ManifestMap,
+	revision string, includeClusterResources bool) (string, error) {
+	labels := map[string]string{
+		operatorLabelStr: operatorReconcileStr,
+	}
+	cpManifestMap := make(name.ManifestMap)
+	if revision != "" {
+		labels[label.IoIstioRev.Name] = revision
+	}
+	if !includeClusterResources {
+		// only delete istiod resources if revision is empty and --purge flag is not true.
+		cpManifestMap[name.PilotComponentName] = manifestMap[name.PilotComponentName]
+		manifestMap = cpManifestMap
+	}
+	var k8sObjects object.K8sObjects
+	for cn, mf := range manifestMap.Consolidated() {
+		if cn == string(name.IstioBaseComponentName) && !includeClusterResources {
+			continue
+		}
+		objects, err := object.ParseK8sObjectsFromYAMLManifest(mf)
+		if err != nil {
+			return "", fmt.Errorf("failed to parse k8s objects from yaml: %v", err)
+		}
+		if objects == nil {
+			continue
+		}
+
+		for _, obj := range objects {
+			obju := obj.UnstructuredObject()
+			receiver := &unstructured.Unstructured{}
+			receiver.SetAPIVersion(obju.GetAPIVersion())
+			receiver.SetKind(obju.GetKind())
+			objectKey := client.ObjectKeyFromObject(obju)
+
+			err := h.client.Get(context.TODO(), objectKey, receiver)
+			switch {
+			case kerrors.IsNotFound(err) || meta.IsNoMatchError(err):
+				// Not finding the resource is ok. It can be removed by others
+				// or does not exist from earlier version of istio.
+				continue
+			case err == nil:
+				// Cleanup each object, only retain the fields that istio manages
+				annotations := receiver.Object["metadata"].(map[string]interface{})["annotations"]
+				if annotations != nil {
+					lastconfig := annotations.(map[string]interface{})["kubectl.kubernetes.io/last-applied-configuration"].(string)
+					k8sobject, err := object.ParseJSONToK8sObject([]byte(lastconfig))
+					if err != nil {
+						return "", fmt.Errorf("failed to retrieve istio resource: %v", err)
+					}
+					k8sObjects = append(k8sObjects, k8sobject)
+				}
+			case err != nil:
+				return "", fmt.Errorf("failed to retrieve istio resource: %v", err)
+			}
+		}
+	}
+	k8sObjects.Sort(object.DefaultObjectOrder())
+	var retStr string
+	for _, obj := range k8sObjects {
+		yml, err := obj.YAML()
+		if err != nil {
+			return "", fmt.Errorf("failed to get manifest yaml for k8s object: %v", err)
+		}
+		retStr += object.YAMLSeparator + string(yml)
+	}
+
+	return retStr, nil
 }

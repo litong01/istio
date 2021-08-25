@@ -250,7 +250,7 @@ func InstallManifests(iop *v1alpha12.IstioOperator, force bool, dryRun bool, res
 			return iop, err
 		}
 		expectedObj := obj.UnstructuredObject()
-		result, err := showDifferences(currentObj, expectedObj)
+		result, err := showDifferences(reconciler, iop, currentObj, expectedObj)
 		if err != nil {
 			return iop, err
 		}
@@ -260,7 +260,9 @@ func InstallManifests(iop *v1alpha12.IstioOperator, force bool, dryRun bool, res
 	return iop, saveIOPToCluster(reconciler, iopStr)
 }
 
-func showDifferences(existing, target *unstructured.Unstructured) (string, error) {
+func showDifferences(reconciler *helmreconciler.HelmReconciler, iop *v1alpha12.IstioOperator,
+	existing, target *unstructured.Unstructured) (string, error) {
+
 	existingYAML := []byte("")
 	if existing != nil {
 		var err error
@@ -282,11 +284,12 @@ func showDifferences(existing, target *unstructured.Unstructured) (string, error
 	result := "\n\nConfiguration differences:\n"
 	result += util.YAMLReducedDiff(string(existingYAML), string(targetYAML), 3)
 
-	existingManifest, err := ManifestFromString(string(existingYAML))
-	if err != nil {
-		return "", err
-	}
-	targetManifest, err := ManifestFromString(string(targetYAML))
+	// existingManifest, err := reconciler.GetResourceManifestFromCluster(iop)
+	// if err != nil {
+	// 	return "", err
+	// }
+
+	existingManifest, targetManifest, err := ManifestFromString(string(targetYAML), reconciler)
 	if err != nil {
 		return "", err
 	}
@@ -297,44 +300,51 @@ func showDifferences(existing, target *unstructured.Unstructured) (string, error
 		return "", err
 	}
 	result += maniDiff
+
 	return result, nil
 }
 
 // ManifestString returns manifest based on given a yaml string,
-func ManifestFromString(iopsYAML string) (string, error) {
+func ManifestFromString(iopsYAML string, reconciler *helmreconciler.HelmReconciler) (string, string, error) {
 	if iopsYAML == "" {
-		return "", nil
+		return "", "", nil
 	}
 	liop := &v1alpha12.IstioOperator{}
 	if err := util.UnmarshalWithJSONPB(iopsYAML, liop, true); err != nil {
-		return "", fmt.Errorf("could not unmarshal merged YAML: %s\n\nYAML:\n%s", err, iopsYAML)
+		return "", "", fmt.Errorf("could not unmarshal merged YAML: %s\n\nYAML:\n%s", err, iopsYAML)
 	}
 
 	t := translate.NewTranslator()
 
 	cp, err := controlplane.NewIstioControlPlane(liop.Spec, t)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if err := cp.Run(); err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	manifests, errs := cp.RenderManifest()
 	if errs != nil {
-		return "", errs.ToError()
+		return "", "", errs.ToError()
 	}
+
+	existingManifest, err := reconciler.FetchResources(manifests, "", true)
+	if err != nil {
+		return "", "", err
+	}
+
 	ordered, err := orderedManifests(manifests)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
-	retStr := ""
+	targetManifest := ""
 	for _, m := range ordered {
-		retStr += object.YAMLSeparator + m
+		targetManifest += object.YAMLSeparator + m
 	}
 
-	return retStr, nil
+	return existingManifest, targetManifest, nil
 }
 
 func savedIOPName(iop *v1alpha12.IstioOperator) string {
