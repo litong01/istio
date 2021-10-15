@@ -85,6 +85,7 @@ func (c *kubeComponent) Invoke(args []string) (string, string, error) {
 
 // InvokeOrFail implements Instance
 func (c *kubeComponent) InvokeOrFail(t test.Failer, args []string) (string, string) {
+	cmd.ConfigAndEnvProcessing()
 	output, stderr, err := c.Invoke(args)
 	if err != nil {
 		t.Logf("Unwanted exception for 'istioctl %s': %v", strings.Join(args, " "), err)

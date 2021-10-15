@@ -98,7 +98,6 @@ func TestVersion(t *testing.T) {
 	framework.
 		NewTest(t).Features("usability.observability.version").
 		RequiresSingleCluster().
-		RequiresLocalControlPlane().
 		Run(func(t framework.TestContext) {
 			cfg := i.Settings()
 
@@ -123,7 +122,6 @@ func TestXdsVersion(t *testing.T) {
 	framework.
 		NewTest(t).Features("usability.observability.version").
 		RequiresSingleCluster().
-		RequiresLocalControlPlane().
 		RequireIstioVersion("1.10.0").
 		Run(func(t framework.TestContext) {
 			cfg := i.Settings()
@@ -354,7 +352,6 @@ func jsonUnmarshallOrFail(t test.Failer, context, s string) interface{} {
 func TestProxyStatus(t *testing.T) {
 	framework.NewTest(t).Features("usability.observability.proxy-status").
 		RequiresSingleCluster().
-		RequiresLocalControlPlane().
 		Run(func(t framework.TestContext) {
 			istioCtl := istioctl.NewOrFail(t, t, istioctl.Config{})
 
@@ -412,7 +409,6 @@ func TestProxyStatus(t *testing.T) {
 func TestXdsProxyStatus(t *testing.T) {
 	framework.NewTest(t).Features("usability.observability.proxy-status").
 		RequiresSingleCluster().
-		RequiresLocalControlPlane().
 		Run(func(t framework.TestContext) {
 			istioCtl := istioctl.NewOrFail(t, t, istioctl.Config{})
 
@@ -530,7 +526,6 @@ func TestAuthZCheck(t *testing.T) {
 func TestKubeInject(t *testing.T) {
 	framework.NewTest(t).Features("usability.helpers.kube-inject").
 		RequiresSingleCluster().
-		RequiresLocalControlPlane().
 		Run(func(t framework.TestContext) {
 			istioCtl := istioctl.NewOrFail(t, t, istioctl.Config{})
 			var output string

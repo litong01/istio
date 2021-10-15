@@ -26,6 +26,7 @@ import (
 	"istio.io/istio/pkg/test/framework/components/istio"
 	"istio.io/istio/pkg/test/framework/components/namespace"
 	"istio.io/istio/pkg/test/framework/resource"
+	"istio.io/istio/pkg/test/util/config"
 	"istio.io/istio/tests/integration/pilot/common"
 )
 
@@ -55,6 +56,9 @@ func TestMain(m *testing.M) {
 		NewSuite(m).
 		Setup(istio.Setup(&i, nil)).
 		Setup(func(t resource.Context) error {
+			addr, _ := i.RemoteDiscoveryAddressFor(t.Environment().AllClusters()[0])
+			config.WriteYAML(false, "xds-address: "+addr.String(),
+				"prefer-experimental: true")
 			return common.SetupApps(t, i, apps)
 		}).
 		Run()
