@@ -61,6 +61,7 @@ import (
 	"istio.io/istio/pkg/config/mesh"
 	"istio.io/istio/pkg/config/schema/collections"
 	"istio.io/istio/pkg/config/schema/gvk"
+	"istio.io/istio/pkg/file"
 	istiokeepalive "istio.io/istio/pkg/keepalive"
 	kubelib "istio.io/istio/pkg/kube"
 	"istio.io/istio/pkg/kube/inject"
@@ -73,6 +74,7 @@ import (
 	"istio.io/istio/security/pkg/server/ca/authenticate"
 	"istio.io/istio/security/pkg/server/ca/authenticate/kubeauth"
 	"istio.io/pkg/ctrlz"
+	"istio.io/pkg/env"
 	"istio.io/pkg/filewatcher"
 	"istio.io/pkg/log"
 	"istio.io/pkg/version"
@@ -324,6 +326,11 @@ func NewServer(args *PilotArgs, initFuncs ...func(*Server)) (*Server, error) {
 	// so we build it later.
 	authenticators = append(authenticators,
 		kubeauth.NewKubeJWTAuthenticator(s.environment.Watcher, s.kubeClient.Kube(), s.clusterID, s.multiclusterController.GetRemoteKubeClient, features.JwtPolicy))
+
+	if features.ExternalIstiod && s.kubeClient != nil {
+		s.initLocalSecretListener(args)
+	}
+
 	if features.XDSAuth {
 		s.XDSServer.Authenticators = authenticators
 	}
@@ -1279,5 +1286,75 @@ func (s *Server) initStatusManager(_ *PilotArgs) {
 		s.statusManager = status.NewManager(s.RWConfigStore)
 		s.statusManager.Start(stop)
 		return nil
+	})
+}
+
+// initLocalSecretListener creates a new secret listener to listen for
+// secrets which represent new multi cluster participating clusters in a mesh.
+func (s *Server) initLocalSecretListener(args *PilotArgs) {
+	// Check if this is an instance of Istiod running as external istiod
+	// The logic is based on the following:
+	// 1. command istioctl secret create will always create a secret named
+	//    istio-kubeconfig when secret type is config, to indicate that a cluster
+	//    gets used as a config cluster, the secret type must be config
+	// 2. this secret is required to be added to the namespace where istiod will be
+	//    running, otherwise, istiod wont run as an external istiod
+	// 3. this secret has to be mounted to a location to which the env KUBECONFIG points
+	// 4. due to the structure of the secret, this secret will be always mounted
+	//    as a file named config such as /var/run/secrets/remote/config
+	// 5. this kubeconfig is different from loading credentials off of a service account
+	//    which is how non-external istiod gets configured normally.
+	// Based on the above, this method will just check if the file which the value of
+	// KUBECONFIG points exists and if features.ExternalIstiod is true. With these two
+	// conditions met we should be confident that this is an external Istiod instance.
+
+	// Inspect if the KUBECONFIG pointed location has a file
+	kubeconfigVar := env.StringVar{Var: env.Var{
+		Name: "KUBECONFIG", DefaultValue: "",
+		Description: "", Type: env.STRING,
+	}}
+	if !file.Exists(kubeconfigVar.Get()) {
+		log.Info("KUBECONFIG file does not exist, config cluster secret was not present.")
+		return
+	}
+	log.Infof("Successfully located kubeconfig file %s", kubeconfigVar.Get())
+
+	// Now get the in cluster config
+	config, err := rest.InClusterConfig()
+	if err != nil {
+		log.Errorf("Could not get istiod incluster configuration: %v", err)
+		return
+	}
+	log.Info("Successfully retrieved incluster config.")
+
+	localKubeClient, err := kubelib.NewClient(kubelib.NewClientConfigForRestConfig(config))
+	if err != nil {
+		log.Errorf("Could not create a client to access local cluster API server: %v", err)
+		return
+	}
+	log.Infof("Successfully created in cluster kubeclient at %s", localKubeClient.RESTConfig().Host)
+
+	log.Infof("Istiod namespace: %s", args.Namespace)
+
+	// create a new secret controller using the same store that the other secret controller
+	// also uses.
+	controller := multicluster.NewControllerWithClusterStore(localKubeClient, args.Namespace,
+		"", s.multiclusterController.GetClusterStore())
+
+	controller.AddHandler(kubecontroller.NewMulticluster(args.PodName,
+		localKubeClient.Kube(),
+		args.Namespace,
+		args.RegistryOptions.KubeOptions,
+		s.serviceEntryController,
+		s.istiodCertBundleWatcher,
+		args.Revision,
+		s.shouldStartNsController(),
+		s.environment.ClusterLocal(),
+		s.server))
+
+	log.Infof("Successfully created secret controller for Istiod running in namespace %s at %s",
+		args.Namespace, localKubeClient.RESTConfig().Host)
+	s.addStartFunc(func(stop <-chan struct{}) error {
+		return controller.Run(stop)
 	})
 }

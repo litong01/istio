@@ -91,6 +91,11 @@ type Controller struct {
 
 // NewController returns a new secret controller
 func NewController(kubeclientset kube.Client, namespace string, localClusterID cluster.ID) *Controller {
+	return NewControllerWithClusterStore(kubeclientset, namespace, localClusterID, newClustersStore())
+}
+
+func NewControllerWithClusterStore(kubeclientset kube.Client, namespace string, localClusterID cluster.ID,
+	clusterStore *ClusterStore) *Controller {
 	secretsInformer := cache.NewSharedIndexInformer(
 		&cache.ListWatch{
 			ListFunc: func(opts metav1.ListOptions) (runtime.Object, error) {
@@ -113,7 +118,7 @@ func NewController(kubeclientset kube.Client, namespace string, localClusterID c
 		namespace:          namespace,
 		localClusterID:     localClusterID,
 		localClusterClient: kubeclientset,
-		cs:                 newClustersStore(),
+		cs:                 clusterStore,
 		informer:           secretsInformer,
 	}
 	controller.queue = controllers.NewQueue("multicluster secret", controllers.WithReconciler(controller.processItem))
@@ -126,13 +131,21 @@ func (c *Controller) AddHandler(h ClusterHandler) {
 	c.handlers = append(c.handlers, h)
 }
 
+func (c *Controller) GetClusterStore() *ClusterStore {
+	return c.cs
+}
+
 // Run starts the controller until it receives a message over stopCh
 func (c *Controller) Run(stopCh <-chan struct{}) error {
 	// run handlers for the local cluster; do not store this *Cluster in the ClusterStore or give it a SyncTimeout
 	// this is done outside the goroutine, we should block other Run/startFuncs until this is registered
-	localCluster := &Cluster{Client: c.localClusterClient, ID: c.localClusterID}
-	if err := c.handleAdd(localCluster, stopCh); err != nil {
-		return fmt.Errorf("failed initializing local cluster %s: %v", c.localClusterID, err)
+	if c.localClusterID.String() == "" {
+		log.Infof("The cluster is the external cluster, do not call ClusterAdded")
+	} else {
+		localCluster := &Cluster{Client: c.localClusterClient, ID: c.localClusterID}
+		if err := c.handleAdd(localCluster, stopCh); err != nil {
+			return fmt.Errorf("failed initializing local cluster %s: %v", c.localClusterID, err)
+		}
 	}
 	go func() {
 		t0 := time.Now()

@@ -739,7 +739,7 @@ func (i *operatorComponent) configureDirectAPIServerAccess(ctx resource.Context,
 
 func (i *operatorComponent) configureDirectAPIServiceAccessForCluster(ctx resource.Context, cfg Config,
 	c cluster.Cluster) error {
-	clusters := ctx.Clusters().Configs(c.Config())
+	clusters := ctx.AllClusters().Primaries(c)
 	if len(clusters) == 0 {
 		// giving 0 clusters to ctx.ConfigKube() means using all clusters
 		return nil
